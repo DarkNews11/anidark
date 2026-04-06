@@ -3,15 +3,16 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.catalog",
-    version: "1.0.0",
+    version: "1.1.0",
     name: "AniDark",
-    description: "The latest anime releases, seasonal charts, and genre discovery. English titles prioritized.",
+    description: "The ultimate anime & movies hub. Seasonal charts, genres, and trending films. English titles prioritized.",
     resources: ["catalog"],
-    types: ["anime"],
+    types: ["anime", "movie"],
     idPrefixes: ["kitsu:"],
     catalogs: [
         { type: "anime", id: "anidark_trending", name: "Trending This Week" },
         { type: "anime", id: "anidark_current", name: "Current Season (Spring 2026)" },
+        { type: "movie", id: "anidark_movies", name: "Trending Anime Movies" },
         { 
             type: "anime", 
             id: "anidark_past", 
@@ -30,49 +31,51 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    let url = "";
+    let url = "https://kitsu.io/api/edge/anime";
+    let params = "?limit=20";
     
-    // Lógica para encaminhar cada catálogo para a pesquisa correta
     if (id === "anidark_trending") {
-        url = "https://kitsu.io/api/edge/trending/anime?limit=20";
+        url = "https://kitsu.io/api/edge/trending/anime";
     } else if (id === "anidark_current") {
-        url = "https://kitsu.io/api/edge/anime?filter[season]=spring&filter[seasonYear]=2026&sort=-userCount&limit=20";
+        params += "&filter[season]=spring&filter[seasonYear]=2026&sort=-userCount";
+    } else if (id === "anidark_movies") {
+        params += "&filter[kind]=movie&sort=-userCount";
     } else if (id === "anidark_past" && extra.genre) {
         const [season, year] = extra.genre.toLowerCase().split(" ");
-        url = `https://kitsu.io/api/edge/anime?filter[season]=${season}&filter[seasonYear]=${year}&sort=-userCount&limit=20`;
+        params += `&filter[season]=${season}&filter[seasonYear]=${year}&sort=-userCount`;
     } else if (id === "anidark_genres" && extra.genre) {
-        if (extra.genre === "Others") {
-            url = "https://kitsu.io/api/edge/anime?sort=-createdAt&limit=20"; // Animes recentes gerais
+        if (extra.genre !== "Others") {
+            params += `&filter[categories]=${extra.genre}&sort=-userCount`;
         } else {
-            url = `https://kitsu.io/api/edge/anime?filter[categories]=${extra.genre}&sort=-userCount&limit=20`;
+            params += "&sort=-createdAt";
         }
-    } else {
-        return { metas: [] };
     }
 
     try {
-        const { data } = await axios.get(url);
+        const response = await axios.get(`${url}${params}`, { timeout: 5000 });
         
-        const metas = data.data.map(anime => {
+        const metas = response.data.data.map(anime => {
             const attrs = anime.attributes;
-            const tituloFinal = attrs.titles.en || attrs.titles.en_jp || attrs.canonicalTitle;
+            
+            // Lógica de Título Refinada
+            let title = attrs.titles.en || attrs.titles.en_us || attrs.titles.en_jp || attrs.canonicalTitle;
             
             return {
                 id: `kitsu:${anime.id}`,
-                type: "anime",
-                name: tituloFinal,
+                type: (attrs.subtype === "movie") ? "movie" : "anime",
+                name: title,
                 poster: attrs.posterImage ? attrs.posterImage.large : "",
+                background: attrs.coverImage ? attrs.coverImage.original : attrs.posterImage ? attrs.posterImage.original : "",
                 description: attrs.synopsis,
-                genres: attrs.subtype ? [attrs.subtype] : []
+                releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : ""
             };
         });
         
         return { metas };
     } catch (erro) {
-        console.error("Erro a contactar o Kitsu:", erro);
+        console.error("Kitsu API Error:", erro.message);
         return { metas: [] };
     }
 });
 
-// A porta 'process.env.PORT' é essencial para alojamentos na cloud
 serveHTTP(builder.getInterface(), { port: process.env.PORT || 7000 });
