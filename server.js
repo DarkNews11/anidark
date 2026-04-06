@@ -2,18 +2,18 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
 const manifest = {
-    id: "org.anidark.mal",
-    version: "3.1.0",
+    id: "org.anidark.kitsu.pro",
+    version: "4.0.0",
     name: "AniDark",
-    description: "MAL Metadata with Kitsu Streams. Prefixed for easy access.",
+    description: "Kitsu Engine with V9 UI features. 100% Stream Compatibility.",
     resources: ["catalog", "meta"],
     types: ["anime"],
-    idPrefixes: ["mal:", "kitsu:"], // Adicionado kitsu aos prefixos para maior compatibilidade
+    idPrefixes: ["kitsu:"],
     catalogs: [
         { type: "anime", id: "anidark_trending", name: "AD - Trending Anime" },
         { type: "anime", id: "anidark_current", name: "AD - Current Season" },
         { type: "anime", id: "anidark_movies_trend", name: "AD - Trending Movies" },
-        { type: "anime", id: "anidark_movies_current", name: "AD - Movies Current Season" }, 
+        { type: "anime", id: "anidark_movies_current", name: "AD - Movies Spring 2026" }, 
         {
             type: "anime",
             id: "anidark_past",
@@ -24,103 +24,85 @@ const manifest = {
 };
 
 const builder = new addonBuilder(manifest);
-const jikanApi = axios.create({ baseURL: "https://api.jikan.moe/v4" });
+const kitsuApi = axios.create({ baseURL: "https://kitsu.io/api/edge" });
 
+// Sistema de Cache
 const cache = {};
-const CACHE_TTL = 3 * 60 * 60 * 1000; // 3 Horas de Cache
+const CACHE_TTL = 3 * 60 * 60 * 1000;
 
 async function fetchWithCache(endpoint) {
     if (cache[endpoint] && (Date.now() - cache[endpoint].timestamp < CACHE_TTL)) {
         return cache[endpoint].data;
     }
-    // Delay para respeitar o limite de 3req/sec do Jikan
-    await new Promise(resolve => setTimeout(resolve, 1000));
     try {
-        const response = await jikanApi.get(endpoint, { timeout: 7000 });
+        const response = await kitsuApi.get(endpoint, { timeout: 7000 });
         cache[endpoint] = { timestamp: Date.now(), data: response.data.data };
         return response.data.data;
     } catch (error) {
-        console.error(`Jikan Error (${endpoint}):`, error.message);
+        console.error(`Erro Kitsu (${endpoint}):`, error.message);
         return null;
     }
 }
 
-// Mapeamento ultrarrápido para Kitsu
-async function getKitsuId(malId) {
-    const key = `k_map_${malId}`;
-    if (cache[key]) return cache[key];
-    try {
-        const res = await axios.get(`https://kitsu.io/api/edge/mappings?filter[externalSite]=myanimelist/anime&filter[externalId]=${malId}`, { timeout: 4000 });
-        if (res.data?.data?.[0]) {
-            const id = res.data.data[0].relationships.item.data.id;
-            cache[key] = id;
-            return id;
-        }
-    } catch (e) { console.error("Kitsu Mapping Fail"); }
-    return null;
+// Filtro agressivo para Títulos em Inglês
+function getBestTitle(attrs) {
+    if (!attrs) return "Unknown Title";
+    return attrs.titles?.en || attrs.titles?.en_us || attrs.titles?.en_jp || attrs.canonicalTitle || "Unknown Title";
 }
 
-function getSafeTitle(anime) {
-    if (!anime) return "Unknown Title";
-    // Forçar a ordem de prioridade de nomes ingleses
-    return anime.title_english || anime.title || anime.title_japanese || "Unknown Title";
-}
-
+// 1. CATÁLOGOS
 builder.defineCatalogHandler(async ({ id, extra }) => {
-    let endpoint = "";
-    let isMovieSeason = false;
+    let endpoint = "/anime?limit=25";
 
-    if (id === "anidark_trending") endpoint = "/top/anime?filter=airing&limit=25";
-    else if (id === "anidark_current") endpoint = "/seasons/now?limit=25";
-    else if (id === "anidark_movies_trend") endpoint = "/top/anime?type=movie&limit=25";
-    else if (id === "anidark_movies_current") { endpoint = "/seasons/now?limit=25"; isMovieSeason = true; }
+    if (id === "anidark_trending") endpoint = "/trending/anime?limit=25";
+    else if (id === "anidark_current") endpoint = "/anime?filter[season]=spring&filter[seasonYear]=2026&sort=-userCount&limit=25";
+    else if (id === "anidark_movies_trend") endpoint = "/anime?filter[subtype]=movie&sort=-userCount&limit=25";
+    else if (id === "anidark_movies_current") endpoint = "/anime?filter[subtype]=movie&filter[season]=spring&filter[seasonYear]=2026&sort=-userCount&limit=25";
     else if (id === "anidark_past" && extra.genre) {
         const [s, y] = extra.genre.toLowerCase().split(" ");
-        endpoint = `/seasons/${y}/${s}?limit=25`;
+        endpoint = `/anime?filter[season]=${s}&filter[seasonYear]=${y}&sort=-userCount&limit=25`;
     }
 
     const data = await fetchWithCache(endpoint);
     if (!data) return { metas: [] };
 
-    let results = data;
-    if (isMovieSeason) results = results.filter(a => a.type === "Movie");
-
     return {
-        metas: results.map(a => ({
-            id: `mal:${a.mal_id}`,
+        metas: data.map(anime => ({
+            id: `kitsu:${anime.id}`,
             type: "anime",
-            name: getSafeTitle(a),
-            poster: a.images?.webp?.large_image_url || a.images?.jpg?.large_image_url || ""
+            name: getBestTitle(anime.attributes),
+            poster: anime.attributes.posterImage?.large || anime.attributes.posterImage?.original || ""
         }))
     };
 });
 
+// 2. METADADOS E PROTEÇÃO DA PÁGINA
 builder.defineMetaHandler(async ({ id }) => {
-    const malId = id.split(":")[1];
+    const kitsuId = id.split(":")[1];
     
-    // Pedidos em paralelo para máxima performance
-    const [anime, epData, kitsuId] = await Promise.all([
-        fetchWithCache(`/anime/${malId}`),
-        fetchWithCache(`/anime/${malId}/episodes`),
-        getKitsuId(malId)
+    // Puxamos a informação do anime e a primeira página de episódios
+    const [anime, epsData] = await Promise.all([
+        fetchWithCache(`/anime/${kitsuId}`),
+        fetchWithCache(`/anime/${kitsuId}/episodes?page[limit]=40`)
     ]);
 
     if (!anime) return { meta: {} };
+    const attrs = anime.attributes;
+    const cleanTitle = getBestTitle(attrs);
 
-    const prefix = kitsuId ? `kitsu:${kitsuId}` : `mal:${malId}`;
-    const cleanTitle = getSafeTitle(anime);
-
+    // Mapeamento dos episódios nativos do Kitsu para carregar as streams
     let videos = [];
-    if (epData && epData.length > 0) {
-        videos = epData.map(e => ({
-            id: `${prefix}:${e.mal_id}`,
-            title: e.title || `Episode ${e.mal_id}`,
-            episode: e.mal_id,
-            season: 1
+    if (epsData && epsData.length > 0) {
+        epsData.sort((a, b) => a.attributes.number - b.attributes.number);
+        videos = epsData.map(ep => ({
+            id: `kitsu:${kitsuId}:${ep.attributes.number}`,
+            title: ep.attributes.titles?.en_us || ep.attributes.titles?.en_jp || `Episode ${ep.attributes.number}`,
+            episode: ep.attributes.number,
+            season: 1,
+            released: ep.attributes.airdate ? new Date(ep.attributes.airdate).toISOString() : undefined
         }));
-    } else {
-        // Fallback para filmes ou animes sem lista de episódios
-        videos = [{ id: `${prefix}:1`, title: cleanTitle, episode: 1, season: 1 }];
+    } else if (attrs.subtype === "movie" || attrs.episodeCount === 1) {
+        videos = [{ id: `kitsu:${kitsuId}:1`, title: cleanTitle, episode: 1, season: 1 }];
     }
 
     return {
@@ -128,12 +110,12 @@ builder.defineMetaHandler(async ({ id }) => {
             id: id,
             type: "anime",
             name: cleanTitle,
-            description: anime.synopsis || "No description available.",
-            poster: anime.images?.webp?.large_image_url || anime.images?.jpg?.large_image_url || "",
-            background: anime.trailer?.images?.maximum_image_url || anime.images?.jpg?.large_image_url || "",
-            genres: anime.genres?.map(g => g.name) || [],
-            releaseInfo: anime.year?.toString() || "",
-            videos: videos
+            description: attrs.synopsis || "Sinopse não disponível.",
+            poster: attrs.posterImage?.large || "",
+            background: attrs.coverImage?.original || attrs.posterImage?.original || "",
+            genres: attrs.subtype ? [attrs.subtype] : [],
+            releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : "",
+            videos: videos.length > 0 ? videos : undefined
         }
     };
 });
