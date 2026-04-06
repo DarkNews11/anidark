@@ -2,112 +2,95 @@ const { addonBuilder, serveHTTP } = require("stremio-addon-sdk");
 const axios = require("axios");
 
 const manifest = {
-    id: "org.anidark.catalog",
-    version: "1.3.0",
+    id: "org.anidark.mal",
+    version: "2.0.0",
     name: "AniDark",
-    description: "Anime & Movies Hub. Smart titles, seasonal charts, and dedicated movie filters.",
+    description: "Powered by MyAnimeList. Impeccable metadata and dedicated movie sections.",
     resources: ["catalog", "meta"],
     types: ["anime"],
-    idPrefixes: ["kitsu:"],
+    idPrefixes: ["mal:"], // O prefixo mudou para o MyAnimeList
     catalogs: [
         { type: "anime", id: "anidark_trending", name: "Trending Anime" },
         { type: "anime", id: "anidark_current", name: "Current Season (Spring 2026)" },
-        { 
-            type: "anime", 
-            id: "anidark_past", 
-            name: "Anime by Season", 
-            extra: [{ name: "genre", isRequired: true, options: ["Winter 2026", "Fall 2025", "Summer 2025", "Spring 2025", "Winter 2025", "Fall 2024"] }] 
-        },
-        { 
-            type: "anime", 
-            id: "anidark_genres", 
-            name: "Anime by Genre", 
-            extra: [{ name: "genre", isRequired: true, options: ["Action", "Adventure", "Comedy", "Drama", "Fantasy", "Isekai", "Mecha", "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", "Sports", "Supernatural", "Thriller", "Others"] }] 
-        },
-        // --- SECÇÃO EXCLUSIVA DE FILMES ---
         { type: "anime", id: "anidark_movies_trend", name: "Trending Movies" },
-        { 
-            type: "anime", 
-            id: "anidark_movies_season", 
-            name: "Movies by Season", 
-            extra: [{ name: "genre", isRequired: true, options: ["Winter 2026", "Fall 2025", "Summer 2025", "Spring 2025", "Winter 2025", "Fall 2024"] }] 
+        // Esta categoria sem "extra" é o que a faz aparecer na página principal
+        { type: "anime", id: "anidark_movies_current", name: "Movies (Spring 2026)" }, 
+        {
+            type: "anime",
+            id: "anidark_past",
+            name: "Anime by Season",
+            extra: [{ name: "genre", isRequired: true, options: ["Winter 2026", "Fall 2025", "Summer 2025", "Spring 2025", "Winter 2025", "Fall 2024"] }]
         }
     ]
 };
 
 const builder = new addonBuilder(manifest);
 
-// Função para filtrar os títulos de forma inteligente (Evita o erro "Kyoushit")
-function getBestTitle(titles, canonical) {
-    if (!titles) return canonical || "Unknown Title";
-    return titles.en || titles.en_us || titles.en_jp || titles.ja_jp || canonical;
-}
+// Cliente preparado para a API v4 do Jikan
+const jikanApi = axios.create({ baseURL: "https://api.jikan.moe/v4" });
 
-// 1. LÓGICA DO CATÁLOGO
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    let url = "https://kitsu.io/api/edge/anime";
-    let params = "?limit=20";
-    
-    if (id === "anidark_trending") {
-        url = "https://kitsu.io/api/edge/trending/anime";
-    } else if (id === "anidark_current") {
-        params += "&filter[season]=spring&filter[seasonYear]=2026&sort=-userCount";
-    } else if (id === "anidark_past" && extra.genre) {
+    let endpoint = "";
+    let isMovieCurrentSeason = false;
+
+    if (id === "anidark_trending") endpoint = "/top/anime?filter=airing&limit=20";
+    else if (id === "anidark_current") endpoint = "/seasons/now?limit=20";
+    else if (id === "anidark_movies_trend") endpoint = "/top/anime?type=movie&limit=20";
+    else if (id === "anidark_movies_current") {
+        endpoint = "/seasons/now?limit=25"; 
+        isMovieCurrentSeason = true; // Flag para filtrarmos filmes do que está a dar agora
+    }
+    else if (id === "anidark_past" && extra.genre) {
         const [season, year] = extra.genre.toLowerCase().split(" ");
-        params += `&filter[season]=${season}&filter[seasonYear]=${year}&sort=-userCount`;
-    } else if (id === "anidark_genres" && extra.genre) {
-        if (extra.genre !== "Others") {
-            params += `&filter[categories]=${extra.genre}&sort=-userCount`;
-        } else {
-            params += "&sort=-createdAt";
-        }
-    } else if (id === "anidark_movies_trend") {
-        params += "&filter[subtype]=movie&sort=-userCount";
-    } else if (id === "anidark_movies_season" && extra.genre) {
-        const [season, year] = extra.genre.toLowerCase().split(" ");
-        params += `&filter[subtype]=movie&filter[season]=${season}&filter[seasonYear]=${year}&sort=-userCount`;
+        endpoint = `/seasons/${year}/${season}?limit=20`;
     }
 
     try {
-        const response = await axios.get(`${url}${params}`, { timeout: 6000 });
-        const metas = response.data.data.map(anime => {
-            const attrs = anime.attributes;
+        const response = await jikanApi.get(endpoint);
+        let rawData = response.data.data;
+
+        // Se for o separador de filmes da época, escondemos as séries
+        if (isMovieCurrentSeason) {
+            rawData = rawData.filter(anime => anime.type === "Movie");
+        }
+
+        const metas = rawData.map(anime => {
             return {
-                id: `kitsu:${anime.id}`,
+                id: `mal:${anime.mal_id}`,
                 type: "anime",
-                name: getBestTitle(attrs.titles, attrs.canonicalTitle),
-                poster: attrs.posterImage ? attrs.posterImage.large : "",
+                name: anime.title_english || anime.title,
+                poster: anime.images.jpg.large_image_url || "",
             };
         });
         return { metas };
     } catch (erro) {
-        console.error("Erro no Catálogo:", erro.message);
+        console.error("Erro no Jikan (Catálogo):", erro.message);
         return { metas: [] };
     }
 });
 
-// 2. LÓGICA DOS METADADOS (O Ecrã de Detalhes)
 builder.defineMetaHandler(async ({ type, id }) => {
-    const kitsuId = id.split(":")[1]; 
-    
+    const malId = id.split(":")[1];
+
     try {
-        const response = await axios.get(`https://kitsu.io/api/edge/anime/${kitsuId}`, { timeout: 6000 });
-        const attrs = response.data.data.attributes;
+        const response = await jikanApi.get(`/anime/${malId}`);
+        const anime = response.data.data;
 
         return {
             meta: {
                 id: id,
                 type: "anime",
-                name: getBestTitle(attrs.titles, attrs.canonicalTitle),
-                description: attrs.synopsis,
-                poster: attrs.posterImage ? attrs.posterImage.large : "",
-                background: attrs.coverImage ? attrs.coverImage.original : (attrs.posterImage ? attrs.posterImage.original : ""),
-                genres: attrs.subtype ? [attrs.subtype] : [],
-                releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : ""
+                name: anime.title_english || anime.title,
+                description: anime.synopsis,
+                poster: anime.images.jpg.large_image_url || "",
+                // O Jikan tem as thumbnails dos trailers oficiais, ótimas para background
+                background: anime.trailer?.images?.maximum_image_url || anime.images.jpg.large_image_url || "",
+                genres: anime.genres ? anime.genres.map(g => g.name) : [],
+                releaseInfo: anime.year ? anime.year.toString() : ""
             }
         };
     } catch (erro) {
-        console.error("Erro nos Metadados:", erro.message);
+        console.error("Erro no Jikan (Metadados):", erro.message);
         return { meta: {} };
     }
 });
