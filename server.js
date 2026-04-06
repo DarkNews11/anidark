@@ -3,20 +3,14 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "10.0.0",
+    version: "10.1.0",
     name: "AniDark",
-    description: "Search Enabled & Movie Streams Fixed.",
+    description: "Search Enabled & Native Movie Rendering Fixed.",
     resources: ["catalog", "meta"],
     types: ["anime", "movie"],
     idPrefixes: ["kitsu:"],
     catalogs: [
-        // O catálogo de pesquisa tem de ser o primeiro para o Stremio o priorizar
-        { 
-            type: "anime", 
-            id: "anidark_search", 
-            name: "AD - Search", 
-            extra: [{ name: "search", isRequired: true }] 
-        },
+        { type: "anime", id: "anidark_search", name: "AD - Search", extra: [{ name: "search", isRequired: true }] },
         { type: "anime", id: "anidark_trending", name: "AD - Trending Anime" },
         { type: "anime", id: "anidark_current", name: "AD - Current Season", extra: [{ name: "skip" }] },
         { type: "anime", id: "anidark_movies_trend", name: "AD - Trending Movies", extra: [{ name: "skip" }] },
@@ -66,13 +60,11 @@ function getBestTitle(attrs) {
     return attrs.titles?.en || attrs.titles?.en_us || attrs.titles?.en_jp || attrs.canonicalTitle || "Unknown Title";
 }
 
-// 1. CATÁLOGOS (Com lógica de Pesquisa adicionada)
 builder.defineCatalogHandler(async ({ id, extra }) => {
     const skip = extra.skip || 0; 
     const limit = 20; 
     let endpoint = "";
 
-    // Lógica para a Barra de Pesquisa do Stremio
     if (extra.search) {
         endpoint = `/anime?filter[text]=${encodeURIComponent(extra.search)}&page[limit]=${limit}&page[offset]=${skip}`;
     } else if (id === "anidark_trending") {
@@ -104,7 +96,6 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
     };
 });
 
-// 2. METADADOS E VIDEOS (Sinal de Filmes corrigido)
 builder.defineMetaHandler(async ({ id }) => {
     const kitsuId = id.split(":")[1];
     
@@ -116,17 +107,14 @@ builder.defineMetaHandler(async ({ id }) => {
     if (!anime) return { meta: {} };
     const attrs = anime.attributes;
     const cleanTitle = getBestTitle(attrs);
-
-    let videos = [];
     const isMovie = attrs.subtype === "movie";
-    
-    // O tipo final muda se for filme para o Stremio procurar no sítio certo
     const finalType = isMovie ? "movie" : "anime";
 
-    if (isMovie) {
-        // Correção Crítica: Filmes não podem ter ":1" no ID.
-        videos = [{ id: `kitsu:${kitsuId}`, title: cleanTitle }];
-    } else {
+    let videos = undefined; // Inicializado como indefinido (crucial para os filmes)
+
+    // Se NÃO for filme, geramos a lista de episódios da série
+    if (!isMovie) {
+        videos = [];
         const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
         let lastEpNumber = 0;
         
@@ -168,7 +156,7 @@ builder.defineMetaHandler(async ({ id }) => {
             background: attrs.coverImage?.original || attrs.posterImage?.original || "",
             genres: attrs.subtype ? [attrs.subtype] : [],
             releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : "",
-            videos: videos
+            ...(videos && { videos }) // Injeta "videos" na resposta apenas se for uma série
         }
     };
 });
