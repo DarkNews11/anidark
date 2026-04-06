@@ -3,15 +3,21 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "9.0.0",
+    version: "10.0.0",
     name: "AniDark",
-    description: "Infinite Scrolling & Advanced Movie Filters.",
+    description: "Search Enabled & Movie Streams Fixed.",
     resources: ["catalog", "meta"],
-    types: ["anime"],
+    types: ["anime", "movie"],
     idPrefixes: ["kitsu:"],
     catalogs: [
+        // O catálogo de pesquisa tem de ser o primeiro para o Stremio o priorizar
+        { 
+            type: "anime", 
+            id: "anidark_search", 
+            name: "AD - Search", 
+            extra: [{ name: "search", isRequired: true }] 
+        },
         { type: "anime", id: "anidark_trending", name: "AD - Trending Anime" },
-        // O parâmetro { name: "skip" } é o que diz ao Stremio que este catálogo tem mais páginas
         { type: "anime", id: "anidark_current", name: "AD - Current Season", extra: [{ name: "skip" }] },
         { type: "anime", id: "anidark_movies_trend", name: "AD - Trending Movies", extra: [{ name: "skip" }] },
         { type: "anime", id: "anidark_movies_current", name: "AD - Movies Spring 2026", extra: [{ name: "skip" }] }, 
@@ -24,7 +30,6 @@ const manifest = {
                 { name: "skip" }
             ]
         },
-        // O novo catálogo de filmes antigos
         {
             type: "anime",
             id: "anidark_movies_past",
@@ -61,16 +66,17 @@ function getBestTitle(attrs) {
     return attrs.titles?.en || attrs.titles?.en_us || attrs.titles?.en_jp || attrs.canonicalTitle || "Unknown Title";
 }
 
-// 1. CATÁLOGOS COM PAGINAÇÃO DINÂMICA
+// 1. CATÁLOGOS (Com lógica de Pesquisa adicionada)
 builder.defineCatalogHandler(async ({ id, extra }) => {
-    // O skip diz quantos animes devemos saltar (página 1 salta 0, página 2 salta 20, etc.)
     const skip = extra.skip || 0; 
-    const limit = 20; // O Kitsu prefere blocos de 20 para estabilidade
-    
+    const limit = 20; 
     let endpoint = "";
 
-    if (id === "anidark_trending") {
-        endpoint = `/trending/anime?limit=${limit}`; // O trending não suporta bem paginação
+    // Lógica para a Barra de Pesquisa do Stremio
+    if (extra.search) {
+        endpoint = `/anime?filter[text]=${encodeURIComponent(extra.search)}&page[limit]=${limit}&page[offset]=${skip}`;
+    } else if (id === "anidark_trending") {
+        endpoint = `/trending/anime?limit=${limit}`; 
     } else if (id === "anidark_current") {
         endpoint = `/anime?filter[season]=spring&filter[seasonYear]=2026&sort=-userCount&page[limit]=${limit}&page[offset]=${skip}`;
     } else if (id === "anidark_movies_trend") {
@@ -81,7 +87,6 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
         const [s, y] = extra.genre.toLowerCase().split(" ");
         endpoint = `/anime?filter[season]=${s}&filter[seasonYear]=${y}&sort=-userCount&page[limit]=${limit}&page[offset]=${skip}`;
     } else if (id === "anidark_movies_past" && extra.genre) {
-        // Filtro específico para o novo separador de filmes
         const [s, y] = extra.genre.toLowerCase().split(" ");
         endpoint = `/anime?filter[subtype]=movie&filter[season]=${s}&filter[seasonYear]=${y}&sort=-userCount&page[limit]=${limit}&page[offset]=${skip}`;
     }
@@ -99,7 +104,7 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
     };
 });
 
-// 2. METADADOS E EPISÓDIOS (Mantém a blindagem perfeita de compatibilidade)
+// 2. METADADOS E VIDEOS (Sinal de Filmes corrigido)
 builder.defineMetaHandler(async ({ id }) => {
     const kitsuId = id.split(":")[1];
     
@@ -113,11 +118,16 @@ builder.defineMetaHandler(async ({ id }) => {
     const cleanTitle = getBestTitle(attrs);
 
     let videos = [];
-    const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
+    const isMovie = attrs.subtype === "movie";
     
-    if (attrs.subtype === "movie" || attrs.episodeCount === 1) {
-        videos = [{ id: `kitsu:${kitsuId}:1`, title: cleanTitle, episode: 1, season: 1 }];
+    // O tipo final muda se for filme para o Stremio procurar no sítio certo
+    const finalType = isMovie ? "movie" : "anime";
+
+    if (isMovie) {
+        // Correção Crítica: Filmes não podem ter ":1" no ID.
+        videos = [{ id: `kitsu:${kitsuId}`, title: cleanTitle }];
     } else {
+        const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
         let lastEpNumber = 0;
         
         if (epsData && epsData.length > 0) {
@@ -151,7 +161,7 @@ builder.defineMetaHandler(async ({ id }) => {
     return {
         meta: {
             id: id,
-            type: "anime",
+            type: finalType,
             name: cleanTitle,
             description: attrs.synopsis || "Sinopse não disponível.",
             poster: attrs.posterImage?.large || "",
