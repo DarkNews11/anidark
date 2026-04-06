@@ -3,11 +3,11 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "7.0.0",
+    version: "8.0.0",
     name: "AniDark",
-    description: "Universal Stream Compatibility. Forced Series/Movie Types.",
+    description: "Strict Kitsu Standard. Fixed Types for Scraper Compatibility.",
     resources: ["catalog", "meta"],
-    types: ["anime", "series", "movie"], // Abertura a todos os tipos de scrapers
+    types: ["anime"], // Revertido para o padrão correto
     idPrefixes: ["kitsu:"],
     catalogs: [
         { type: "anime", id: "anidark_trending", name: "AD - Trending Anime" },
@@ -65,7 +65,7 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
     return {
         metas: data.map(anime => ({
             id: `kitsu:${anime.id}`,
-            type: "anime", // Mantemos "anime" no catálogo para aparecer na aba certa
+            type: "anime",
             name: getBestTitle(anime.attributes),
             poster: anime.attributes.posterImage?.large || anime.attributes.posterImage?.original || ""
         }))
@@ -87,11 +87,7 @@ builder.defineMetaHandler(async ({ id }) => {
     let videos = [];
     const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
     
-    // A GRANDE MUDANÇA: Definir o tipo universal
-    const isMovie = attrs.subtype === "movie" || attrs.episodeCount === 1;
-    const finalType = isMovie ? "movie" : "series"; 
-    
-    if (isMovie) {
+    if (attrs.subtype === "movie" || attrs.episodeCount === 1) {
         videos = [{ id: `kitsu:${kitsuId}:1`, title: cleanTitle, episode: 1, season: 1 }];
     } else {
         let lastEpNumber = 0;
@@ -100,13 +96,13 @@ builder.defineMetaHandler(async ({ id }) => {
             const validEps = epsData.filter(ep => ep.attributes && ep.attributes.number != null);
             validEps.sort((a, b) => a.attributes.number - b.attributes.number);
             validEps.forEach(ep => {
-                const epNum = ep.attributes.number;
+                const epNum = parseInt(ep.attributes.number);
                 videos.push({
                     id: `kitsu:${kitsuId}:${epNum}`,
                     title: ep.attributes.titles?.en_us || ep.attributes.titles?.en_jp || `Episode ${epNum}`,
-                    episode: epNum,
-                    season: 1,
-                    released: ep.attributes.airdate ? new Date(ep.attributes.airdate).toISOString() : undefined
+                    episode: epNum, // Tem de ser inteiro puro
+                    season: 1,      // Obrigatório para o Torrentio
+                    thumbnail: ep.attributes.thumbnail?.original || null // Reforçar a miniatura
                 });
                 lastEpNumber = epNum;
             });
@@ -126,7 +122,7 @@ builder.defineMetaHandler(async ({ id }) => {
     return {
         meta: {
             id: id,
-            type: finalType, // O Stremio agora pensa que é uma série/filme normal
+            type: "anime", // Revertido para garantir a escuta do Torrentio
             name: cleanTitle,
             description: attrs.synopsis || "Sinopse não disponível.",
             poster: attrs.posterImage?.large || "",
