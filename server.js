@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.mal",
-    version: "2.1.0",
+    version: "2.2.0",
     name: "AniDark",
-    description: "Powered by MyAnimeList. Impeccable metadata and cached catalogs for TV stability.",
+    description: "Powered by MyAnimeList. Impeccable metadata, English titles locked, and full episode lists.",
     resources: ["catalog", "meta"],
     types: ["anime"],
     idPrefixes: ["mal:"],
@@ -26,17 +26,14 @@ const manifest = {
 const builder = new addonBuilder(manifest);
 const jikanApi = axios.create({ baseURL: "https://api.jikan.moe/v4" });
 
-// SISTEMA DE CACHE: Guarda os dados para não sobrecarregar a API
 const cache = {};
-const CACHE_TTL = 2 * 60 * 60 * 1000; // Guarda os dados por 2 horas
+const CACHE_TTL = 2 * 60 * 60 * 1000;
 
 async function fetchWithCache(endpoint) {
-    // Se já estiver na memória, devolve instantaneamente
     if (cache[endpoint] && (Date.now() - cache[endpoint].timestamp < CACHE_TTL)) {
         return cache[endpoint].data;
     }
     
-    // Pequeno atraso aleatório para o Stremio não rebentar com o limite do Jikan
     await new Promise(resolve => setTimeout(resolve, Math.random() * 1200));
     
     try {
@@ -49,7 +46,6 @@ async function fetchWithCache(endpoint) {
     }
 }
 
-// Funções seguras para extrair Imagens e Títulos (evita ecrãs pretos)
 function getSafeImage(anime) {
     if (!anime || !anime.images) return "";
     return anime.images.webp?.large_image_url || anime.images.jpg?.large_image_url || "";
@@ -60,6 +56,7 @@ function getSafeTitle(anime) {
     return anime.title_english || anime.title || "Unknown Title";
 }
 
+// 1. CATÁLOGO
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
     let endpoint = "";
     let isMovieCurrentSeason = false;
@@ -94,16 +91,39 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
     return { metas };
 });
 
+// 2. METADADOS E EPISÓDIOS (O bloqueio da interferência)
 builder.defineMetaHandler(async ({ type, id }) => {
     const malId = id.split(":")[1];
+    
+    // Puxa a informação do anime e a lista de episódios ao mesmo tempo
     const anime = await fetchWithCache(`/anime/${malId}`);
+    const episodesData = await fetchWithCache(`/anime/${malId}/episodes`);
     
     if (!anime) return { meta: {} };
 
-    // Tenta ir buscar o fundo em alta resolução ao thumbnail do YouTube, senão usa o poster
     let backgroundUrl = getSafeImage(anime);
     if (anime.trailer && anime.trailer.images && anime.trailer.images.maximum_image_url) {
         backgroundUrl = anime.trailer.images.maximum_image_url;
+    }
+
+    // Constrói a lista de episódios nativa para o Stremio
+    let videos = [];
+    if (episodesData && episodesData.length > 0) {
+        videos = episodesData.map(ep => ({
+            id: `mal:${malId}:${ep.mal_id}`,
+            title: ep.title || `Episode ${ep.mal_id}`,
+            episode: ep.mal_id,
+            season: 1,
+            released: ep.aired ? new Date(ep.aired).toISOString() : undefined
+        }));
+    } else if (anime.type === "Movie" || anime.episodes === 1) {
+        // Se for um filme ou tiver só 1 episódio e não houver lista, criamos um vídeo único
+        videos = [{
+            id: `mal:${malId}:1`,
+            title: getSafeTitle(anime),
+            episode: 1,
+            season: 1
+        }];
     }
 
     return {
@@ -115,7 +135,8 @@ builder.defineMetaHandler(async ({ type, id }) => {
             poster: getSafeImage(anime),
             background: backgroundUrl,
             genres: anime.genres ? anime.genres.map(g => g.name) : [],
-            releaseInfo: anime.year ? anime.year.toString() : ""
+            releaseInfo: anime.year ? anime.year.toString() : "",
+            videos: videos // Isto impede o Stremio de puxar o nome em Japonês dos outros addons
         }
     };
 });
