@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "6.0.0",
+    version: "6.1.0",
     name: "AniDark",
-    description: "Kitsu Engine - Strict Stream Formatting & Failsafes.",
+    description: "Kitsu Engine - Rock Solid Episodes without NaN errors.",
     resources: ["catalog", "meta"],
     types: ["anime"],
     idPrefixes: ["kitsu:"],
@@ -93,13 +93,16 @@ builder.defineMetaHandler(async ({ id }) => {
         let lastEpNumber = 0;
         
         if (epsData && epsData.length > 0) {
-            epsData.sort((a, b) => parseInt(a.attributes.number) - parseInt(b.attributes.number));
-            epsData.forEach(ep => {
-                const epNum = parseInt(ep.attributes.number) || 1;
+            // Filtro de segurança: removemos episódios com dados corrompidos na origem
+            const validEps = epsData.filter(ep => ep.attributes && ep.attributes.number != null);
+            
+            validEps.sort((a, b) => a.attributes.number - b.attributes.number);
+            validEps.forEach(ep => {
+                const epNum = ep.attributes.number;
                 videos.push({
                     id: `kitsu:${kitsuId}:${epNum}`,
                     title: ep.attributes.titles?.en_us || ep.attributes.titles?.en_jp || `Episode ${epNum}`,
-                    episode: epNum, // Tem de ser Integer puro
+                    episode: epNum,
                     season: 1,
                     released: ep.attributes.airdate ? new Date(ep.attributes.airdate).toISOString() : undefined
                 });
@@ -107,6 +110,7 @@ builder.defineMetaHandler(async ({ id }) => {
             });
         }
         
+        // O gerador automático volta à sua forma original segura
         const maxToGenerate = Math.max(totalEps, lastEpNumber);
         for (let i = lastEpNumber + 1; i <= maxToGenerate; i++) {
             videos.push({
@@ -128,10 +132,7 @@ builder.defineMetaHandler(async ({ id }) => {
             background: attrs.coverImage?.original || attrs.posterImage?.original || "",
             genres: attrs.subtype ? [attrs.subtype] : [],
             releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : "",
-            videos: videos,
-            behaviorHints: {
-                defaultVideoId: videos.length > 0 ? videos[0].id : id // Guia invisível para o Stremio
-            }
+            videos: videos
         }
     };
 });
