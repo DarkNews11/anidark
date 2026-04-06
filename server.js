@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "5.0.0",
+    version: "6.0.0",
     name: "AniDark",
-    description: "Kitsu Engine - Perfect Episodes & Failsafes.",
+    description: "Kitsu Engine - Strict Stream Formatting & Failsafes.",
     resources: ["catalog", "meta"],
     types: ["anime"],
     idPrefixes: ["kitsu:"],
@@ -38,12 +38,10 @@ async function fetchWithCache(endpoint) {
         cache[endpoint] = { timestamp: Date.now(), data: response.data.data };
         return response.data.data;
     } catch (error) {
-        // Em caso de erro do Kitsu, silenciamos e devolvemos null para forçar a criação manual de episódios
         return null; 
     }
 }
 
-// Filtro agressivo para Títulos em Inglês
 function getBestTitle(attrs) {
     if (!attrs) return "Unknown Title";
     return attrs.titles?.en || attrs.titles?.en_us || attrs.titles?.en_jp || attrs.canonicalTitle || "Unknown Title";
@@ -77,7 +75,6 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
 builder.defineMetaHandler(async ({ id }) => {
     const kitsuId = id.split(":")[1];
     
-    // O limite máximo aceite pelo Kitsu é 20.
     const [anime, epsData] = await Promise.all([
         fetchWithCache(`/anime/${kitsuId}`),
         fetchWithCache(`/anime/${kitsuId}/episodes?page[limit]=20`)
@@ -88,29 +85,28 @@ builder.defineMetaHandler(async ({ id }) => {
     const cleanTitle = getBestTitle(attrs);
 
     let videos = [];
-    const totalEps = attrs.episodeCount || 24; // Failsafe base
+    const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
     
     if (attrs.subtype === "movie" || attrs.episodeCount === 1) {
         videos = [{ id: `kitsu:${kitsuId}:1`, title: cleanTitle, episode: 1, season: 1 }];
     } else {
         let lastEpNumber = 0;
         
-        // 1. Inserir os episódios reais fornecidos pelo Kitsu
         if (epsData && epsData.length > 0) {
-            epsData.sort((a, b) => a.attributes.number - b.attributes.number);
+            epsData.sort((a, b) => parseInt(a.attributes.number) - parseInt(b.attributes.number));
             epsData.forEach(ep => {
+                const epNum = parseInt(ep.attributes.number) || 1;
                 videos.push({
-                    id: `kitsu:${kitsuId}:${ep.attributes.number}`,
-                    title: ep.attributes.titles?.en_us || ep.attributes.titles?.en_jp || `Episode ${ep.attributes.number}`,
-                    episode: ep.attributes.number,
+                    id: `kitsu:${kitsuId}:${epNum}`,
+                    title: ep.attributes.titles?.en_us || ep.attributes.titles?.en_jp || `Episode ${epNum}`,
+                    episode: epNum, // Tem de ser Integer puro
                     season: 1,
                     released: ep.attributes.airdate ? new Date(ep.attributes.airdate).toISOString() : undefined
                 });
-                lastEpNumber = ep.attributes.number;
+                lastEpNumber = epNum;
             });
         }
         
-        // 2. Failsafe: Gerar episódios em falta artificialmente (ideal para animes de >20 episódios)
         const maxToGenerate = Math.max(totalEps, lastEpNumber);
         for (let i = lastEpNumber + 1; i <= maxToGenerate; i++) {
             videos.push({
@@ -132,7 +128,10 @@ builder.defineMetaHandler(async ({ id }) => {
             background: attrs.coverImage?.original || attrs.posterImage?.original || "",
             genres: attrs.subtype ? [attrs.subtype] : [],
             releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : "",
-            videos: videos
+            videos: videos,
+            behaviorHints: {
+                defaultVideoId: videos.length > 0 ? videos[0].id : id // Guia invisível para o Stremio
+            }
         }
     };
 });
