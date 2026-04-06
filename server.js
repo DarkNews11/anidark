@@ -3,11 +3,11 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "6.1.0",
+    version: "7.0.0",
     name: "AniDark",
-    description: "Kitsu Engine - Rock Solid Episodes without NaN errors.",
+    description: "Universal Stream Compatibility. Forced Series/Movie Types.",
     resources: ["catalog", "meta"],
-    types: ["anime"],
+    types: ["anime", "series", "movie"], // Abertura a todos os tipos de scrapers
     idPrefixes: ["kitsu:"],
     catalogs: [
         { type: "anime", id: "anidark_trending", name: "AD - Trending Anime" },
@@ -65,7 +65,7 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
     return {
         metas: data.map(anime => ({
             id: `kitsu:${anime.id}`,
-            type: "anime",
+            type: "anime", // Mantemos "anime" no catálogo para aparecer na aba certa
             name: getBestTitle(anime.attributes),
             poster: anime.attributes.posterImage?.large || anime.attributes.posterImage?.original || ""
         }))
@@ -87,15 +87,17 @@ builder.defineMetaHandler(async ({ id }) => {
     let videos = [];
     const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
     
-    if (attrs.subtype === "movie" || attrs.episodeCount === 1) {
+    // A GRANDE MUDANÇA: Definir o tipo universal
+    const isMovie = attrs.subtype === "movie" || attrs.episodeCount === 1;
+    const finalType = isMovie ? "movie" : "series"; 
+    
+    if (isMovie) {
         videos = [{ id: `kitsu:${kitsuId}:1`, title: cleanTitle, episode: 1, season: 1 }];
     } else {
         let lastEpNumber = 0;
         
         if (epsData && epsData.length > 0) {
-            // Filtro de segurança: removemos episódios com dados corrompidos na origem
             const validEps = epsData.filter(ep => ep.attributes && ep.attributes.number != null);
-            
             validEps.sort((a, b) => a.attributes.number - b.attributes.number);
             validEps.forEach(ep => {
                 const epNum = ep.attributes.number;
@@ -110,7 +112,6 @@ builder.defineMetaHandler(async ({ id }) => {
             });
         }
         
-        // O gerador automático volta à sua forma original segura
         const maxToGenerate = Math.max(totalEps, lastEpNumber);
         for (let i = lastEpNumber + 1; i <= maxToGenerate; i++) {
             videos.push({
@@ -125,7 +126,7 @@ builder.defineMetaHandler(async ({ id }) => {
     return {
         meta: {
             id: id,
-            type: "anime",
+            type: finalType, // O Stremio agora pensa que é uma série/filme normal
             name: cleanTitle,
             description: attrs.synopsis || "Sinopse não disponível.",
             poster: attrs.posterImage?.large || "",
