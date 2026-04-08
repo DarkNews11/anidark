@@ -3,9 +3,9 @@ const axios = require("axios");
 
 const manifest = {
     id: "org.anidark.kitsu.pro",
-    version: "10.1.0",
+    version: "11.0.0",
     name: "AniDark",
-    description: "Search Enabled & Native Movie Rendering Fixed.",
+    description: "Search explicitly sorted by newest release.",
     resources: ["catalog", "meta"],
     types: ["anime", "movie"],
     idPrefixes: ["kitsu:"],
@@ -66,7 +66,8 @@ builder.defineCatalogHandler(async ({ id, extra }) => {
     let endpoint = "";
 
     if (extra.search) {
-        endpoint = `/anime?filter[text]=${encodeURIComponent(extra.search)}&page[limit]=${limit}&page[offset]=${skip}`;
+        // Adicionado &sort=-startDate para forçar do mais recente para o mais antigo
+        endpoint = `/anime?filter[text]=${encodeURIComponent(extra.search)}&sort=-startDate&page[limit]=${limit}&page[offset]=${skip}`;
     } else if (id === "anidark_trending") {
         endpoint = `/trending/anime?limit=${limit}`; 
     } else if (id === "anidark_current") {
@@ -110,9 +111,8 @@ builder.defineMetaHandler(async ({ id }) => {
     const isMovie = attrs.subtype === "movie";
     const finalType = isMovie ? "movie" : "anime";
 
-    let videos = undefined; // Inicializado como indefinido (crucial para os filmes)
+    let videos = undefined;
 
-    // Se NÃO for filme, geramos a lista de episódios da série
     if (!isMovie) {
         videos = [];
         const totalEps = (attrs.episodeCount && attrs.episodeCount > 0) ? attrs.episodeCount : 24;
@@ -156,7 +156,7 @@ builder.defineMetaHandler(async ({ id }) => {
             background: attrs.coverImage?.original || attrs.posterImage?.original || "",
             genres: attrs.subtype ? [attrs.subtype] : [],
             releaseInfo: attrs.startDate ? attrs.startDate.split("-")[0] : "",
-            ...(videos && { videos }) // Injeta "videos" na resposta apenas se for uma série
+            ...(videos && { videos })
         }
     };
 });
